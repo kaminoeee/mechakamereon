@@ -2,740 +2,181 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>3D街中ペイントかくれんぼ (ロビー機能付き)</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Cyberpunk Alley</title>
     <style>
-        body { margin: 0; overflow: hidden; font-family: 'Helvetica Neue', Arial, sans-serif; user-select: none; background: #111; color: white; }
-        
-        /* 画面共通UI */
-        .overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; justify-content: center; align-items: center; z-index: 100; }
-        
-        /* ロビー画面 */
-        #lobby-screen { background: rgba(20, 20, 30, 0.95); flex-direction: column; }
-        .lobby-box { background: #1e1e2e; padding: 30px; border-radius: 12px; box-shadow: 0 8px 32px rgba(0,0,0,0.5); width: 320px; text-align: center; }
-        
-        /* ゲーム中UI */
-        #game-ui { position: absolute; top: 10px; left: 10px; background: rgba(10, 10, 15, 0.85); padding: 15px; border-radius: 8px; z-index: 10; max-width: 260px; pointer-events: auto; display: none; }
-        
-        input, button { margin-top: 8px; padding: 10px; font-size: 14px; width: 100%; box-sizing: border-box; border: none; border-radius: 6px; }
-        button { background: #2ecc71; color: white; cursor: pointer; font-weight: bold; transition: 0.2s; }
-        button:hover { background: #27ae60; }
-        .btn-paint { background: #3498db; }
-        .btn-paint:hover { background: #2980b9; }
-        
-        #color-picker { height: 40px; padding: 0; cursor: pointer; }
-        .status-tag { font-weight: bold; padding: 8px; border-radius: 6px; text-align: center; margin-top: 8px; font-size: 13px; }
-        .state-move { background: #27ae60; }
-        .state-paint { background: #2980b9; }
-        .state-freeze { background: #e74c3c; animation: blink 1s infinite; }
-        
-        @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
-        hr { border: 0; border-top: 1px solid #333; margin: 12px 0; }
-        .player-list { text-align: left; background: #111; padding: 8px; border-radius: 4px; max-height: 100px; overflow-y: auto; font-size: 12px; }
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #050505;
+        }
+        #canvas-container {
+            width: 100vw;
+            height: 100vh;
+        }
+        #loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #00ffcc;
+            font-family: sans-serif;
+            font-size: 24px;
+            pointer-events: none;
+        }
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-    <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 </head>
 <body>
 
-    <div id="lobby-screen" class="overlay">
-        <div class="lobby-box">
-            <h2>🏙️ 街中ペイント隠れんぼ</h2>
-            <p>あなたの通信ID:</p>
-            <div id="my-id" style="color:#f1c40f; font-weight:bold; font-size:16px; word-break:break-all; background:#111; padding:8px; border-radius:4px;">接続中...</div>
-            <hr>
-            <input type="text" id="peer-id-input" placeholder="ホストのIDを入力して参戦">
-            <button id="connect-btn" class="btn-paint">ホストの部屋に入る</button>
-            <hr>
-            <p>接続中のプレイヤー:</p>
-            <div class="player-list" id="lobby-players">自分 (Host)</div>
-            <button id="start-game-btn" style="margin-top:15px; display:block;">ゲーム開始！ (Hostのみ)</button>
-        </div>
-    </div>
-
-    <div id="game-ui">
-        <h3>🎨 ペイント＆擬態</h3>
-        <input type="color" id="color-picker" value="#ff3333">
-        <div id="state-tag" class="status-tag state-move">状態: 地上移動中</div>
-        <hr>
-        <p style="font-size: 11px; color: #ccc; line-height: 1.4;">
-            <strong>【Shiftキー】</strong> モード切替<br>
-            ┗ 移動 ⇆ ペイント(マウスドラッグ)<br>
-            <strong>【SPACEキー】</strong> 浮遊 ＆ 位置固定！<br>
-            ┗ 空中でピタッと止まって背景と同化！
-        </p>
-    </div>
+    <div id="loading">裏路地を生成中...</div>
+    <div id="canvas-container"></div>
 
     <script>
-        // --- 1. 基本設定と変数 ---
-        let isGameStarted = false;
-        let currentMode = "move"; // move, paint, freeze
-        let savedY = 1.4; // 浮遊固定時の高さを記憶
-
+        // --- 基本設定 ---
+        const container = document.getElementById('canvas-container');
         const scene = new THREE.Scene();
-        scene.background = new THREE.Color(0x0a0a10); // 夜の街風
-        scene.fog = new THREE.FogExp2(0x0a0a10, 0.015);
+        // 街の奥が見えないようにフォグ（霧）を設定して空気感を出す
+        scene.fog = new THREE.FogExp2(0x0a0a10, 0.03);
 
-        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+        // カメラ設定 (画角, アスペクト比, クリップ手前, クリップ奥)
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(0, 2, 15); // 路地の入り口付近にカメラを配置
+
+        // レンダラー設定（影の有効化とアンチエイリアス）
         const renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
-        document.body.appendChild(renderer.domElement);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.shadowMap.enabled = true; // 🌟 影を有効化
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap; // 柔らかな影表現
+        renderer.toneMapping = THREE.ACESFilmicToneMapping; // 映画のような色合いにする
+        container.appendChild(renderer.domElement);
 
-        // 明かり（街灯っぽいスポットと環境光）
-        const ambientLight = new THREE.AmbientLight(0xffffff, 0.3);
+        // カメラコントロール (マウスで視点変更可能に)
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+        controls.maxPolarAngle = Math.PI / 2 - 0.05; // 地面の下にカメラが入らないように制限
+
+        // --- ライト（照明）の設定 ---
+        // 1. 全体的な環境光（薄暗い夜の雰囲気）
+        const ambientLight = new THREE.AmbientLight(0x0a0f1d, 0.6);
         scene.add(ambientLight);
-        const sunLight = new THREE.DirectionalLight(0x8899ff, 0.6);
-        sunLight.position.set(20, 40, 20);
-        scene.add(sunLight);
 
-        // --- 2. プレイヤーのカスタムテクスチャ（ペイント用） ---
-        const canvasSize = 512;
-        const paintCanvas = document.createElement('canvas');
-        paintCanvas.width = canvasSize; paintCanvas.height = canvasSize;
-        const ctx = paintCanvas.getContext('2d');
-        ctx.fillStyle = '#44444c'; ctx.fillRect(0, 0, canvasSize, canvasSize); // 初期はコンクリート色
+        // 2. 月光・街灯のシミュレート（強い影を落とす平行光源）
+        const dirLight = new THREE.DirectionalLight(0x1a2536, 1.5);
+        dirLight.position.set(10, 20, 5);
+        dirLight.castShadow = true; // 🌟 影を落とす
+        dirLight.shadow.mapSize.width = 2048; // 影の解像度
+        dirLight.shadow.mapSize.height = 2048;
+        dirLight.shadow.camera.near = 0.5;
+        dirLight.shadow.camera.far = 40;
+        const d = 20;
+        dirLight.shadow.camera.left = -d;
+        dirLight.shadow.camera.right = d;
+        dirLight.shadow.camera.top = d;
+        dirLight.shadow.camera.bottom = -d;
+        scene.add(dirLight);
 
-        const myTexture = new THREE.CanvasTexture(paintCanvas);
-        const myMaterial = new THREE.MeshStandardMaterial({ map: myTexture, roughness: 0.7 });
+        // --- マテリアル（質感）の簡易作成 ---
+        // 本来は画像テクスチャを貼りますが、コード単体で動くように色の粗さと金属度で質感を表現
+        const wallMaterial = new THREE.MeshStandardMaterial({ color: 0x222225, roughness: 0.9, metalness: 0.1 });
+        const groundMaterial = new THREE.MeshStandardMaterial({ color: 0x111113, roughness: 0.8, metalness: 0.3 });
+        const neonCyan = new THREE.MeshBasicMaterial({ color: 0x00f3ff });
+        const neonPink = new THREE.MeshBasicMaterial({ color: 0xff0055 });
 
-        let brushColor = '#ff3333';
-        document.getElementById('color-picker').addEventListener('input', (e) => brushColor = e.target.value);
+        // --- 街並み（裏路地）の構築 ---
+        // 地面（濡れたアスファルトをイメージ）
+        const floorGeo = new THREE.PlaneGeometry(50, 100);
+        const floor = new THREE.Mesh(floorGeo, groundMaterial);
+        floor.rotation.x = -Math.PI / 2;
+        floor.receiveShadow = true; // 🌟 影を受ける
+        scene.add(floor);
 
-        // --- 3. 🏙️ 「街（ストリート）」マップの構築 ---
-        // 道路（アスファルト）
-        const roadGeo = new THREE.PlaneGeometry(80, 80);
-        const roadMat = new THREE.MeshStandardMaterial({ color: 0x1c1c22, roughness: 0.9 });
-        const road = new THREE.Mesh(roadGeo, roadMat);
-        road.rotation.x = -Math.PI / 2;
-        scene.add(road);
-
-        // ビルやストリートオブジェクトを配置する関数
-        function buildStructure(w, h, d, x, z, color, roughness = 0.5) {
-            const geo = new THREE.BoxGeometry(w, h, d);
-            const mat = new THREE.MeshStandardMaterial({ color: color, roughness: roughness });
-            const mesh = new THREE.Mesh(geo, mat);
-            mesh.position.set(x, h / 2, z);
+        // ビル・壁の自動生成関数
+        function createBuilding(x, z, width, height, depth) {
+            const geo = new THREE.BoxGeometry(width, height, depth);
+            const mesh = new THREE.Mesh(geo, wallMaterial);
+            mesh.position.set(x, height / 2, z);
+            mesh.castShadow = true; // 🌟 影を落とす
+            mesh.receiveShadow = true; // 🌟 影を受ける
             scene.add(mesh);
-            return mesh;
-        }
 
-        // 街並みの配置（色とりどりのビルや壁）
-        buildStructure(15, 25, 15, -25, -25, 0x2c3e50); // 青ビル
-        buildStructure(12, 30, 12, 25, -25, 0xe74c3c);  // 赤ビル（高層）
-        buildStructure(18, 18, 12, -25, 20, 0xf1c40f);  // 黄色ビル
-        buildStructure(15, 20, 15, 25, 20, 0x2ecc71);   // 緑ビル
-
-        // 中央の広場とオブジェクト（隠れ場所）
-        buildStructure(6, 8, 6, 0, -15, 0x34495e); // 中央のモニュメント台座
-        
-        // 街灯やカラフルな自動販売機・標識風の壁
-        buildStructure(2, 4, 1, -8, 5, 0x3498db);  // 青い自販機
-        buildStructure(2, 4, 1, 8, 5, 0xe67e22);   // オレンジの自販機
-        buildStructure(20, 5, 0.5, 0, -5, 0xffffff); // 巨大な白い掲示板（ペイント同化の絶好スポット）
-
-        // --- 4. 🧍 精密になった3D棒人間モデルの生成システム ---
-        function createDetailedStickman(materialObj) {
-            const group = new THREE.Group();
-
-            // 頭
-            const head = new THREE.Mesh(new THREE.SphereGeometry(0.35, 32, 32), materialObj);
-            head.position.y = 2.4; head.name = "paintable"; group.add(head);
-
-            // 首
-            const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.15), materialObj);
-            neck.position.y = 2.0; neck.name = "paintable"; group.add(neck);
-
-            // 胴体（胸・腰で少し太さを変える）
-            const body = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.16, 1.1, 16), materialObj);
-            body.position.y = 1.4; body.name = "paintable"; group.add(body);
-
-            // 腕（肩関節を意識した配置）
-            const armL = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.05, 0.9), materialObj);
-            armL.position.set(-0.35, 1.4, 0); armL.rotation.z = Math.PI/12; armL.name = "paintable";
-            const armR = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.05, 0.9), materialObj);
-            armR.position.set(0.35, 1.4, 0); armR.rotation.z = -Math.PI/12; armR.name = "paintable";
-            group.add(armL, armR);
-
-            // 足（太もも・ふくらはぎのバランス）
-            const legL = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.06, 1.0), materialObj);
-            legL.position.set(-0.16, 0.5, 0); legL.name = "paintable";
-            const legR = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.06, 1.0), materialObj);
-            legR.position.set(0.16, 0.5, 0); legR.name = "paintable";
-            group.add(legL, legR);
-
-            return group;
-        }
-
-        const myCharacter = createDetailedStickman(myMaterial);
-        scene.add(myCharacter);
-        myCharacter.position.set(0, 0, 10); // 初期位置
-
-        camera.position.set(0, 12, 22);
-        camera.lookAt(myCharacter.position);
-
-        // --- 5. 🌐 P2Pロビー & 通信同期ロジック (PeerJS) ---
-        const peer = new Peer();
-        let connections = [];
-        const otherPlayers = {};
-        const lobbyListUI = document.getElementById('lobby-players');
-
-        peer.on('open', (id) => { document.getElementById('my-id').innerText = id; });
-        
-        // ホスト側：接続を受け入れる
-        peer.on('connection', (conn) => {
-            setupConnection(conn);
-            updateLobbyUI();
-        });
-
-        // ゲスト側：接続ボタン
-        document.getElementById('connect-btn').addEventListener('click', () => {
-            const targetId = document.getElementById('peer-id-input').value.trim();
-            if (targetId) {
-                const conn = peer.connect(targetId);
-                setupConnection(conn);
+            // 室外機やダクトに見立てた突起をランダムに追加してディテールを上げる
+            const detailCount = Math.floor(Math.random() * 3);
+            for(let i=0; i<detailCount; i++) {
+                const boxGeo = new THREE.BoxGeometry(1, 1, 1);
+                const box = new THREE.Mesh(boxGeo, wallMaterial);
+                box.position.set(
+                    x + (Math.random() - 0.5) * width * 0.5,
+                    Math.random() * height,
+                    z + (Math.random() - 0.5) * depth * 0.5
+                );
+                box.castShadow = true;
+                scene.add(box);
             }
-        });
+        }
 
-        function setupConnection(conn) {
-            connections.push(conn);
-            conn.on('open', () => {
-                // 相手用のアバター用キャンバス一式を作成
-                const pCanvas = document.createElement('canvas');
-                pCanvas.width = canvasSize; pCanvas.height = canvasSize;
-                const pCtx = pCanvas.getContext('2d');
-                pCtx.fillStyle = '#44444c'; pCtx.fillRect(0, 0, canvasSize, canvasSize);
+        // 路地の左右にビルを配置（Z軸方向に並べる）
+        const streetWidth = 4; // 路地の幅
+        for (let z = -40; z <= 20; z += 8) {
+            // 左側のビル群（ランダムに高さと奥行きを変えて雑多感を出す）
+            let hLeft = 10 + Math.random() * 15;
+            let wLeft = 5 + Math.random() * 5;
+            createBuilding(-(streetWidth + wLeft/2), z, wLeft, hLeft, 7);
+
+            // 右側のビル群
+            let hRight = 10 + Math.random() * 15;
+            let wRight = 5 + Math.random() * 5;
+            createBuilding((streetWidth + wRight/2), z, wRight, hRight, 7);
+
+            // サイバーパンク風のネオン看板をランダムに配置
+            if (Math.random() > 0.3) {
+                const neonGeo = new THREE.BoxGeometry(0.1, 3, 1);
+                const isLeft = Math.random() > 0.5;
+                const neon = new THREE.Mesh(neonGeo, isLeft ? neonCyan : neonPink);
                 
-                const pTexture = new THREE.CanvasTexture(pCanvas);
-                const pMaterial = new THREE.MeshStandardMaterial({ map: pTexture, roughness: 0.7 });
-                const pMesh = createDetailedStickman(pMaterial);
-                scene.add(pMesh);
+                // 看板の光が周囲を照らすようにポイントライトを追加
+                const pointLight = new THREE.PointLight(isLeft ? 0x00f3ff : 0xff0055, 1.5, 8);
+                pointLight.castShadow = true;
 
-                otherPlayers[conn.peer] = { mesh: pMesh, canvas: pCanvas, ctx: pCtx, texture: pTexture };
-                updateLobbyUI();
-            });
+                const neonX = isLeft ? -streetWidth : streetWidth;
+                const neonY = 4 + Math.random() * 6;
+                neon.position.set(neonX, neonY, z);
+                pointLight.position.set(neonX * 0.9, neonY, z);
 
-            conn.on('data', (data) => {
-                if (data.type === "start") {
-                    // ホストからゲーム開始合図が来たら画面を切り替える
-                    startGame();
-                } else if (data.type === "sync") {
-                    const p = otherPlayers[data.id];
-                    if (p) {
-                        p.mesh.position.set(data.x, data.y, data.z);
-                        const img = new Image();
-                        img.onload = () => { p.ctx.drawImage(img, 0, 0); p.texture.needsUpdate = true; };
-                        img.src = data.canvasData;
-                    }
-                }
-            });
-        }
-
-        function updateLobbyUI() {
-            let listHTML = "自分 (Host)<br>";
-            connections.forEach(c => { if(c.open) listHTML += `プレイヤー: ${c.peer.slice(0,6)}...<br>`; });
-            lobbyListUI.innerHTML = listHTML;
-        }
-
-        // ホストがゲーム開始ボタンを押した時
-        document.getElementById('start-game-btn').addEventListener('click', () => {
-            connections.forEach(conn => { if(conn.open) conn.send({ type: "start" }); });
-            startGame();
-        });
-
-        function startGame() {
-            isGameStarted = true;
-            document.getElementById('lobby-screen').style.display = 'none';
-            document.getElementById('game-ui').style.display = 'block';
-        }
-
-        // --- 6. 🛠️ 操作システム（移動・自由ペイント・浮遊固定） ---
-        const keys = {};
-        window.addEventListener('keydown', (e) => {
-            keys[e.code] = true;
-            if (!isGameStarted) return;
-
-            // Shiftキーで移動/ペイントの切り替え
-            if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') {
-                if (currentMode !== "freeze") {
-                    currentMode = (currentMode === "move") ? "paint" : "move";
-                }
-            }
-
-            // SPACEキーで「空中浮遊 ＆ 位置完全固定」
-            if (e.code === 'Space') {
-                if (currentMode === "freeze") {
-                    currentMode = "move"; // 解除して移動に戻る
-                    myCharacter.position.y = 0; // 地面に降りる
-                } else {
-                    savedY = myCharacter.position.y; // 現在の高度（ジャンプ中ならその高さ）を固定
-                    currentMode = "freeze";
-                }
-            }
-
-            // 浮遊中の高度調整（Qで上昇、Eで下降）
-            if (currentMode === "freeze") {
-                if (e.code === 'KeyQ') myCharacter.position.y += 0.5;
-                if (e.code === 'KeyE') myCharacter.position.y = Math.max(0, myCharacter.position.y - 0.5);
-            }
-
-            updateUITag();
-        });
-        window.addEventListener('keyup', (e) => keys[e.code] = false);
-
-        function updateUITag() {
-            const tag = document.getElementById('state-tag');
-            if (currentMode === "move") { tag.innerText = "状態: 地上移動中"; tag.className = "status-tag state-move"; }
-            if (currentMode === "paint") { tag.innerText = "状態: ペイント中(一時停止)"; tag.className = "status-tag state-paint"; }
-            if (currentMode === "freeze") { tag.innerText = "状態: 浮遊・位置固定中！"; tag.className = "status-tag state-freeze"; }
-        }
-
-        // マウスによるお絵描き
-        const raycaster = new THREE.Raycaster();
-        const mouse = new THREE.Vector2();
-        let isDrawing = false;
-        window.addEventListener('mousedown', () => { if(currentMode === "paint") isDrawing = true; });
-        window.addEventListener('mouseup', () => isDrawing = false);
-        window.addEventListener('mousemove', (e) => {
-            if (currentMode !== "paint" || !isDrawing) return;
-
-            mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
-            mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
-            raycaster.setFromCamera(mouse, camera);
-
-            const intersects = raycaster.intersectObjects(myCharacter.children);
-            if (intersects.length > 0 && intersects[0].object.name === "paintable") {
-                const hit = intersects[0];
-                if (hit.uv) {
-                    const x = hit.uv.x * canvasSize;
-                    const y = (1 - hit.uv.y) * canvasSize;
-                    ctx.fillStyle = brushColor;
-                    ctx.beginPath(); ctx.arc(x, y, 12, 0, Math.PI * 2); ctx.fill();
-                    myTexture.needsUpdate = true;
-                }
-            }
-        });
-
-        // --- 7. メインループとカメラワーク ---
-        function updateGame() {
-            if (!isGameStarted) return;
-
-            // 移動モードの時だけ十字キー/WASDで動く（地上）
-            if (currentMode === "move") {
-                const speed = 0.2;
-                if (keys['ArrowUp'] || keys['KeyW']) myCharacter.position.z -= speed;
-                if (keys['ArrowDown'] || keys['KeyS']) myCharacter.position.z += speed;
-                if (keys['ArrowLeft'] || keys['KeyA']) myCharacter.position.x -= speed;
-                if (keys['ArrowRight'] || keys['KeyD']) myCharacter.position.x += speed;
-
-                // 簡易ジャンプ（上矢印やWとは別に、特定の空中移動用キーを割り当てても良いが、今回はQ/Eや自由移動を優先）
-                myCharacter.position.y = 0; // 移動中は接地
-            }
-
-            // 街の境界線制限（マップ外に出ないように）
-            myCharacter.position.x = Math.max(-38, Math.min(38, myCharacter.position.x));
-            myCharacter.position.z = Math.max(-38, Math.min(38, myCharacter.position.z));
-
-            // カメラがプレイヤーの背後をスムーズに追従
-            camera.position.x = myCharacter.position.x;
-            camera.position.z = myCharacter.position.z + 16;
-            camera.position.y = myCharacter.position.y + 10;
-            camera.lookAt(myCharacter.position);
-
-            // データのリアルタイム送信
-            if (connections.length > 0) {
-                const syncData = {
-                    type: "sync",
-                    id: peer.id,
-                    x: myCharacter.position.x,
-                    y: myCharacter.position.y,
-                    z: myCharacter.position.z,
-                    canvasData: paintCanvas.toDataURL()
-                };
-                connections.forEach(conn => { if (conn.open) conn.send(syncData); });
+                scene.add(neon);
+                scene.add(pointLight);
             }
         }
 
+        // ロード画面を消す
+        document.getElementById('loading').style.display = 'none';
+
+        // --- アニメーションループ ---
         function animate() {
             requestAnimationFrame(animate);
-            updateGame();
+            controls.update(); // マウス操作の更新
+
+            // ほんの少しカメラを前進させて路地を歩いているような臨場感を出す（ドラッグ中は停止）
+            if (!controls.state == -1) {
+                camera.position.z -= 0.01;
+            }
+
             renderer.render(scene, camera);
         }
-        animate();
 
-        window.addEventListener('resize', () => {
+        // ウィンドウサイズが変更された時のレスポンシブ対応
+        window.addEventListener('resize', onWindowResize, false);
+        function onWindowResize() {
             camera.aspect = window.innerWidth / window.innerHeight;
             camera.updateProjectionMatrix();
             renderer.setSize(window.innerWidth, window.innerHeight);
-        });
-    </script>
-</body>
-</html><!DOCTYPE html>
-<html lang="ja">
-<head>
-    <meta charset="UTF-8">
-    <title>3D街中ペイントかくれんぼ (ロビー機能付き)</title>
-    <style>
-        body { margin: 0; overflow: hidden; font-family: 'Helvetica Neue', Arial, sans-serif; user-select: none; background: #111; color: white; }
-        
-        /* 画面共通UI */
-        .overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; justify-content: center; align-items: center; z-index: 100; }
-        
-        /* ロビー画面 */
-        #lobby-screen { background: rgba(20, 20, 30, 0.95); flex-direction: column; }
-        .lobby-box { background: #1e1e2e; padding: 30px; border-radius: 12px; box-shadow: 0 8px 32px rgba(0,0,0,0.5); width: 320px; text-align: center; }
-        
-        /* ゲーム中UI */
-        #game-ui { position: absolute; top: 10px; left: 10px; background: rgba(10, 10, 15, 0.85); padding: 15px; border-radius: 8px; z-index: 10; max-width: 260px; pointer-events: auto; display: none; }
-        
-        input, button { margin-top: 8px; padding: 10px; font-size: 14px; width: 100%; box-sizing: border-box; border: none; border-radius: 6px; }
-        button { background: #2ecc71; color: white; cursor: pointer; font-weight: bold; transition: 0.2s; }
-        button:hover { background: #27ae60; }
-        .btn-paint { background: #3498db; }
-        .btn-paint:hover { background: #2980b9; }
-        
-        #color-picker { height: 40px; padding: 0; cursor: pointer; }
-        .status-tag { font-weight: bold; padding: 8px; border-radius: 6px; text-align: center; margin-top: 8px; font-size: 13px; }
-        .state-move { background: #27ae60; }
-        .state-paint { background: #2980b9; }
-        .state-freeze { background: #e74c3c; animation: blink 1s infinite; }
-        
-        @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
-        hr { border: 0; border-top: 1px solid #333; margin: 12px 0; }
-        .player-list { text-align: left; background: #111; padding: 8px; border-radius: 4px; max-height: 100px; overflow-y: auto; font-size: 12px; }
-    </style>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-    <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
-</head>
-<body>
-
-    <div id="lobby-screen" class="overlay">
-        <div class="lobby-box">
-            <h2>🏙️ 街中ペイント隠れんぼ</h2>
-            <p>あなたの通信ID:</p>
-            <div id="my-id" style="color:#f1c40f; font-weight:bold; font-size:16px; word-break:break-all; background:#111; padding:8px; border-radius:4px;">接続中...</div>
-            <hr>
-            <input type="text" id="peer-id-input" placeholder="ホストのIDを入力して参戦">
-            <button id="connect-btn" class="btn-paint">ホストの部屋に入る</button>
-            <hr>
-            <p>接続中のプレイヤー:</p>
-            <div class="player-list" id="lobby-players">自分 (Host)</div>
-            <button id="start-game-btn" style="margin-top:15px; display:block;">ゲーム開始！ (Hostのみ)</button>
-        </div>
-    </div>
-
-    <div id="game-ui">
-        <h3>🎨 ペイント＆擬態</h3>
-        <input type="color" id="color-picker" value="#ff3333">
-        <div id="state-tag" class="status-tag state-move">状態: 地上移動中</div>
-        <hr>
-        <p style="font-size: 11px; color: #ccc; line-height: 1.4;">
-            <strong>【Shiftキー】</strong> モード切替<br>
-            ┗ 移動 ⇆ ペイント(マウスドラッグ)<br>
-            <strong>【SPACEキー】</strong> 浮遊 ＆ 位置固定！<br>
-            ┗ 空中でピタッと止まって背景と同化！
-        </p>
-    </div>
-
-    <script>
-        // --- 1. 基本設定と変数 ---
-        let isGameStarted = false;
-        let currentMode = "move"; // move, paint, freeze
-        let savedY = 1.4; // 浮遊固定時の高さを記憶
-
-        const scene = new THREE.Scene();
-        scene.background = new THREE.Color(0x0a0a10); // 夜の街風
-        scene.fog = new THREE.FogExp2(0x0a0a10, 0.015);
-
-        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
-        const renderer = new THREE.WebGLRenderer({ antialias: true });
-        renderer.setSize(window.innerWidth, window.innerHeight);
-        document.body.appendChild(renderer.domElement);
-
-        // 明かり（街灯っぽいスポットと環境光）
-        const ambientLight = new THREE.AmbientLight(0xffffff, 0.3);
-        scene.add(ambientLight);
-        const sunLight = new THREE.DirectionalLight(0x8899ff, 0.6);
-        sunLight.position.set(20, 40, 20);
-        scene.add(sunLight);
-
-        // --- 2. プレイヤーのカスタムテクスチャ（ペイント用） ---
-        const canvasSize = 512;
-        const paintCanvas = document.createElement('canvas');
-        paintCanvas.width = canvasSize; paintCanvas.height = canvasSize;
-        const ctx = paintCanvas.getContext('2d');
-        ctx.fillStyle = '#44444c'; ctx.fillRect(0, 0, canvasSize, canvasSize); // 初期はコンクリート色
-
-        const myTexture = new THREE.CanvasTexture(paintCanvas);
-        const myMaterial = new THREE.MeshStandardMaterial({ map: myTexture, roughness: 0.7 });
-
-        let brushColor = '#ff3333';
-        document.getElementById('color-picker').addEventListener('input', (e) => brushColor = e.target.value);
-
-        // --- 3. 🏙️ 「街（ストリート）」マップの構築 ---
-        // 道路（アスファルト）
-        const roadGeo = new THREE.PlaneGeometry(80, 80);
-        const roadMat = new THREE.MeshStandardMaterial({ color: 0x1c1c22, roughness: 0.9 });
-        const road = new THREE.Mesh(roadGeo, roadMat);
-        road.rotation.x = -Math.PI / 2;
-        scene.add(road);
-
-        // ビルやストリートオブジェクトを配置する関数
-        function buildStructure(w, h, d, x, z, color, roughness = 0.5) {
-            const geo = new THREE.BoxGeometry(w, h, d);
-            const mat = new THREE.MeshStandardMaterial({ color: color, roughness: roughness });
-            const mesh = new THREE.Mesh(geo, mat);
-            mesh.position.set(x, h / 2, z);
-            scene.add(mesh);
-            return mesh;
         }
 
-        // 街並みの配置（色とりどりのビルや壁）
-        buildStructure(15, 25, 15, -25, -25, 0x2c3e50); // 青ビル
-        buildStructure(12, 30, 12, 25, -25, 0xe74c3c);  // 赤ビル（高層）
-        buildStructure(18, 18, 12, -25, 20, 0xf1c40f);  // 黄色ビル
-        buildStructure(15, 20, 15, 25, 20, 0x2ecc71);   // 緑ビル
-
-        // 中央の広場とオブジェクト（隠れ場所）
-        buildStructure(6, 8, 6, 0, -15, 0x34495e); // 中央のモニュメント台座
-        
-        // 街灯やカラフルな自動販売機・標識風の壁
-        buildStructure(2, 4, 1, -8, 5, 0x3498db);  // 青い自販機
-        buildStructure(2, 4, 1, 8, 5, 0xe67e22);   // オレンジの自販機
-        buildStructure(20, 5, 0.5, 0, -5, 0xffffff); // 巨大な白い掲示板（ペイント同化の絶好スポット）
-
-        // --- 4. 🧍 精密になった3D棒人間モデルの生成システム ---
-        function createDetailedStickman(materialObj) {
-            const group = new THREE.Group();
-
-            // 頭
-            const head = new THREE.Mesh(new THREE.SphereGeometry(0.35, 32, 32), materialObj);
-            head.position.y = 2.4; head.name = "paintable"; group.add(head);
-
-            // 首
-            const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.15), materialObj);
-            neck.position.y = 2.0; neck.name = "paintable"; group.add(neck);
-
-            // 胴体（胸・腰で少し太さを変える）
-            const body = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.16, 1.1, 16), materialObj);
-            body.position.y = 1.4; body.name = "paintable"; group.add(body);
-
-            // 腕（肩関節を意識した配置）
-            const armL = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.05, 0.9), materialObj);
-            armL.position.set(-0.35, 1.4, 0); armL.rotation.z = Math.PI/12; armL.name = "paintable";
-            const armR = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.05, 0.9), materialObj);
-            armR.position.set(0.35, 1.4, 0); armR.rotation.z = -Math.PI/12; armR.name = "paintable";
-            group.add(armL, armR);
-
-            // 足（太もも・ふくらはぎのバランス）
-            const legL = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.06, 1.0), materialObj);
-            legL.position.set(-0.16, 0.5, 0); legL.name = "paintable";
-            const legR = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.06, 1.0), materialObj);
-            legR.position.set(0.16, 0.5, 0); legR.name = "paintable";
-            group.add(legL, legR);
-
-            return group;
-        }
-
-        const myCharacter = createDetailedStickman(myMaterial);
-        scene.add(myCharacter);
-        myCharacter.position.set(0, 0, 10); // 初期位置
-
-        camera.position.set(0, 12, 22);
-        camera.lookAt(myCharacter.position);
-
-        // --- 5. 🌐 P2Pロビー & 通信同期ロジック (PeerJS) ---
-        const peer = new Peer();
-        let connections = [];
-        const otherPlayers = {};
-        const lobbyListUI = document.getElementById('lobby-players');
-
-        peer.on('open', (id) => { document.getElementById('my-id').innerText = id; });
-        
-        // ホスト側：接続を受け入れる
-        peer.on('connection', (conn) => {
-            setupConnection(conn);
-            updateLobbyUI();
-        });
-
-        // ゲスト側：接続ボタン
-        document.getElementById('connect-btn').addEventListener('click', () => {
-            const targetId = document.getElementById('peer-id-input').value.trim();
-            if (targetId) {
-                const conn = peer.connect(targetId);
-                setupConnection(conn);
-            }
-        });
-
-        function setupConnection(conn) {
-            connections.push(conn);
-            conn.on('open', () => {
-                // 相手用のアバター用キャンバス一式を作成
-                const pCanvas = document.createElement('canvas');
-                pCanvas.width = canvasSize; pCanvas.height = canvasSize;
-                const pCtx = pCanvas.getContext('2d');
-                pCtx.fillStyle = '#44444c'; pCtx.fillRect(0, 0, canvasSize, canvasSize);
-                
-                const pTexture = new THREE.CanvasTexture(pCanvas);
-                const pMaterial = new THREE.MeshStandardMaterial({ map: pTexture, roughness: 0.7 });
-                const pMesh = createDetailedStickman(pMaterial);
-                scene.add(pMesh);
-
-                otherPlayers[conn.peer] = { mesh: pMesh, canvas: pCanvas, ctx: pCtx, texture: pTexture };
-                updateLobbyUI();
-            });
-
-            conn.on('data', (data) => {
-                if (data.type === "start") {
-                    // ホストからゲーム開始合図が来たら画面を切り替える
-                    startGame();
-                } else if (data.type === "sync") {
-                    const p = otherPlayers[data.id];
-                    if (p) {
-                        p.mesh.position.set(data.x, data.y, data.z);
-                        const img = new Image();
-                        img.onload = () => { p.ctx.drawImage(img, 0, 0); p.texture.needsUpdate = true; };
-                        img.src = data.canvasData;
-                    }
-                }
-            });
-        }
-
-        function updateLobbyUI() {
-            let listHTML = "自分 (Host)<br>";
-            connections.forEach(c => { if(c.open) listHTML += `プレイヤー: ${c.peer.slice(0,6)}...<br>`; });
-            lobbyListUI.innerHTML = listHTML;
-        }
-
-        // ホストがゲーム開始ボタンを押した時
-        document.getElementById('start-game-btn').addEventListener('click', () => {
-            connections.forEach(conn => { if(conn.open) conn.send({ type: "start" }); });
-            startGame();
-        });
-
-        function startGame() {
-            isGameStarted = true;
-            document.getElementById('lobby-screen').style.display = 'none';
-            document.getElementById('game-ui').style.display = 'block';
-        }
-
-        // --- 6. 🛠️ 操作システム（移動・自由ペイント・浮遊固定） ---
-        const keys = {};
-        window.addEventListener('keydown', (e) => {
-            keys[e.code] = true;
-            if (!isGameStarted) return;
-
-            // Shiftキーで移動/ペイントの切り替え
-            if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') {
-                if (currentMode !== "freeze") {
-                    currentMode = (currentMode === "move") ? "paint" : "move";
-                }
-            }
-
-            // SPACEキーで「空中浮遊 ＆ 位置完全固定」
-            if (e.code === 'Space') {
-                if (currentMode === "freeze") {
-                    currentMode = "move"; // 解除して移動に戻る
-                    myCharacter.position.y = 0; // 地面に降りる
-                } else {
-                    savedY = myCharacter.position.y; // 現在の高度（ジャンプ中ならその高さ）を固定
-                    currentMode = "freeze";
-                }
-            }
-
-            // 浮遊中の高度調整（Qで上昇、Eで下降）
-            if (currentMode === "freeze") {
-                if (e.code === 'KeyQ') myCharacter.position.y += 0.5;
-                if (e.code === 'KeyE') myCharacter.position.y = Math.max(0, myCharacter.position.y - 0.5);
-            }
-
-            updateUITag();
-        });
-        window.addEventListener('keyup', (e) => keys[e.code] = false);
-
-        function updateUITag() {
-            const tag = document.getElementById('state-tag');
-            if (currentMode === "move") { tag.innerText = "状態: 地上移動中"; tag.className = "status-tag state-move"; }
-            if (currentMode === "paint") { tag.innerText = "状態: ペイント中(一時停止)"; tag.className = "status-tag state-paint"; }
-            if (currentMode === "freeze") { tag.innerText = "状態: 浮遊・位置固定中！"; tag.className = "status-tag state-freeze"; }
-        }
-
-        // マウスによるお絵描き
-        const raycaster = new THREE.Raycaster();
-        const mouse = new THREE.Vector2();
-        let isDrawing = false;
-        window.addEventListener('mousedown', () => { if(currentMode === "paint") isDrawing = true; });
-        window.addEventListener('mouseup', () => isDrawing = false);
-        window.addEventListener('mousemove', (e) => {
-            if (currentMode !== "paint" || !isDrawing) return;
-
-            mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
-            mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
-            raycaster.setFromCamera(mouse, camera);
-
-            const intersects = raycaster.intersectObjects(myCharacter.children);
-            if (intersects.length > 0 && intersects[0].object.name === "paintable") {
-                const hit = intersects[0];
-                if (hit.uv) {
-                    const x = hit.uv.x * canvasSize;
-                    const y = (1 - hit.uv.y) * canvasSize;
-                    ctx.fillStyle = brushColor;
-                    ctx.beginPath(); ctx.arc(x, y, 12, 0, Math.PI * 2); ctx.fill();
-                    myTexture.needsUpdate = true;
-                }
-            }
-        });
-
-        // --- 7. メインループとカメラワーク ---
-        function updateGame() {
-            if (!isGameStarted) return;
-
-            // 移動モードの時だけ十字キー/WASDで動く（地上）
-            if (currentMode === "move") {
-                const speed = 0.2;
-                if (keys['ArrowUp'] || keys['KeyW']) myCharacter.position.z -= speed;
-                if (keys['ArrowDown'] || keys['KeyS']) myCharacter.position.z += speed;
-                if (keys['ArrowLeft'] || keys['KeyA']) myCharacter.position.x -= speed;
-                if (keys['ArrowRight'] || keys['KeyD']) myCharacter.position.x += speed;
-
-                // 簡易ジャンプ（上矢印やWとは別に、特定の空中移動用キーを割り当てても良いが、今回はQ/Eや自由移動を優先）
-                myCharacter.position.y = 0; // 移動中は接地
-            }
-
-            // 街の境界線制限（マップ外に出ないように）
-            myCharacter.position.x = Math.max(-38, Math.min(38, myCharacter.position.x));
-            myCharacter.position.z = Math.max(-38, Math.min(38, myCharacter.position.z));
-
-            // カメラがプレイヤーの背後をスムーズに追従
-            camera.position.x = myCharacter.position.x;
-            camera.position.z = myCharacter.position.z + 16;
-            camera.position.y = myCharacter.position.y + 10;
-            camera.lookAt(myCharacter.position);
-
-            // データのリアルタイム送信
-            if (connections.length > 0) {
-                const syncData = {
-                    type: "sync",
-                    id: peer.id,
-                    x: myCharacter.position.x,
-                    y: myCharacter.position.y,
-                    z: myCharacter.position.z,
-                    canvasData: paintCanvas.toDataURL()
-                };
-                connections.forEach(conn => { if (conn.open) conn.send(syncData); });
-            }
-        }
-
-        function animate() {
-            requestAnimationFrame(animate);
-            updateGame();
-            renderer.render(scene, camera);
-        }
+        // 実行
         animate();
-
-        window.addEventListener('resize', () => {
-            camera.aspect = window.innerWidth / window.innerHeight;
-            camera.updateProjectionMatrix();
-            renderer.setSize(window.innerWidth, window.innerHeight);
-        });
     </script>
 </body>
 </html>
