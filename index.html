@@ -3,179 +3,186 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>3D Cyberpunk Alley</title>
+    <title>3D Game Map - Alley</title>
     <style>
-        body {
-            margin: 0;
-            overflow: hidden;
-            background-color: #050505;
-        }
-        #canvas-container {
-            width: 100vw;
-            height: 100vh;
-        }
-        #loading {
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            color: #00ffcc;
-            font-family: sans-serif;
-            font-size: 24px;
-            pointer-events: none;
+        body { margin: 0; overflow: hidden; background-color: #000; }
+        #canvas-container { width: 100vw; height: 100vh; }
+        #ui-layer {
+            position: absolute; bottom: 20px; left: 20px;
+            color: #fff; font-family: monospace; font-size: 14px;
+            background: rgba(0,0,0,0.7); padding: 15px; border-radius: 5px;
+            pointer-events: none; border: 1px solid #333;
         }
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/EffectComposer.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/RenderPass.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/ShaderPass.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/CopyShader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/LuminosityHighPassShader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/UnrealBloomPass.js"></script>
 </head>
 <body>
 
-    <div id="loading">裏路地を生成中...</div>
+    <div id="ui-layer">
+        [GAME MAP PREVIEW]<br>
+        • WASD / Mouse: カメラ操作（Orbit）<br>
+        • Rendering: WebGL2 + PBR + UnrealBloom
+    </div>
     <div id="canvas-container"></div>
 
     <script>
-        // --- 基本設定 ---
+        // --- 1. シーン・レンダラーの初期化 ---
         const container = document.getElementById('canvas-container');
         const scene = new THREE.Scene();
-        // 街の奥が見えないようにフォグ（霧）を設定して空気感を出す
-        scene.fog = new THREE.FogExp2(0x0a0a10, 0.03);
+        scene.fog = new THREE.FogExp2(0x05050a, 0.04); // 深い夜の霧
 
-        // カメラ設定 (画角, アスペクト比, クリップ手前, クリップ奥)
-        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-        camera.position.set(0, 2, 15); // 路地の入り口付近にカメラを配置
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(0, 1.6, 8); // プレイヤーの目線（高さ1.6m）にリセット
 
-        // レンダラー設定（影の有効化とアンチエイリアス）
-        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
         renderer.setSize(window.innerWidth, window.innerHeight);
-        renderer.setPixelRatio(window.devicePixelRatio);
-        renderer.shadowMap.enabled = true; // 🌟 影を有効化
-        renderer.shadowMap.type = THREE.PCFSoftShadowMap; // 柔らかな影表現
-        renderer.toneMapping = THREE.ACESFilmicToneMapping; // 映画のような色合いにする
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // 重くならないよう上限2に制限
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        renderer.toneMapping = THREE.ACESFilmicToneMapping; // 映画調のトーンマップ
+        renderer.toneMappingExposure = 1.0;
         container.appendChild(renderer.domElement);
 
-        // カメラコントロール (マウスで視点変更可能に)
         const controls = new THREE.OrbitControls(camera, renderer.domElement);
         controls.enableDamping = true;
         controls.dampingFactor = 0.05;
-        controls.maxPolarAngle = Math.PI / 2 - 0.05; // 地面の下にカメラが入らないように制限
+        controls.target.set(0, 1.6, 0); // プレイヤーの目線の先を注視
 
-        // --- ライト（照明）の設定 ---
-        // 1. 全体的な環境光（薄暗い夜の雰囲気）
-        const ambientLight = new THREE.AmbientLight(0x0a0f1d, 0.6);
+        // --- 2. ライティング（ゲーム向けに最適化） ---
+        const ambientLight = new THREE.AmbientLight(0x020205, 0.2); // 暗部が潰れない程度の環境光
         scene.add(ambientLight);
 
-        // 2. 月光・街灯のシミュレート（強い影を落とす平行光源）
-        const dirLight = new THREE.DirectionalLight(0x1a2536, 1.5);
-        dirLight.position.set(10, 20, 5);
-        dirLight.castShadow = true; // 🌟 影を落とす
-        dirLight.shadow.mapSize.width = 2048; // 影の解像度
-        dirLight.shadow.mapSize.height = 2048;
-        dirLight.shadow.camera.near = 0.5;
-        dirLight.shadow.camera.far = 40;
-        const d = 20;
-        dirLight.shadow.camera.left = -d;
-        dirLight.shadow.camera.right = d;
-        dirLight.shadow.camera.top = d;
-        dirLight.shadow.camera.bottom = -d;
-        scene.add(dirLight);
+        // 月明かり（ディレクショナル）
+        const moonLight = new THREE.DirectionalLight(0x111827, 2.0);
+        moonLight.position.set(5, 20, -5);
+        moonLight.castShadow = true;
+        moonLight.shadow.mapSize.width = 2048; // ゲーム用高解像度シャドウ
+        moonLight.shadow.mapSize.height = 2048;
+        moonLight.shadow.bias = -0.0001; // 影の隙間（ピーターパニング）対策
+        scene.add(moonLight);
 
-        // --- マテリアル（質感）の簡易作成 ---
-        // 本来は画像テクスチャを貼りますが、コード単体で動くように色の粗さと金属度で質感を表現
-        const wallMaterial = new THREE.MeshStandardMaterial({ color: 0x222225, roughness: 0.9, metalness: 0.1 });
-        const groundMaterial = new THREE.MeshStandardMaterial({ color: 0x111113, roughness: 0.8, metalness: 0.3 });
-        const neonCyan = new THREE.MeshBasicMaterial({ color: 0x00f3ff });
-        const neonPink = new THREE.MeshBasicMaterial({ color: 0xff0055 });
+        // --- 3. ポストプロセッシング（命を吹き込む処理） ---
+        const renderPass = new THREE.RenderPass(scene, camera);
+        
+        // UnrealBloomPass(解像度, 強度, 半径, 閾値) - ネオンの光らせ方を調整
+        const bloomPass = new THREE.UnrealBloomPass(
+            new THREE.Vector2(window.innerWidth, window.innerHeight), 
+            1.5,  // 強度 (1.5で強めのネオン感)
+            0.4,  // 半径
+            0.15  // 閾値 (どの明るさから光らせるか)
+        );
 
-        // --- 街並み（裏路地）の構築 ---
-        // 地面（濡れたアスファルトをイメージ）
-        const floorGeo = new THREE.PlaneGeometry(50, 100);
-        const floor = new THREE.Mesh(floorGeo, groundMaterial);
+        const composer = new THREE.EffectComposer(renderer);
+        composer.addPass(renderPass);
+        composer.addPass(bloomPass);
+
+        // --- 4. マテリアル（PBR：物理ベース設定） ---
+        // テクスチャ画像がないため、擬似的に数値で濡れた路面や質感を設定
+        const groundMat = new THREE.MeshStandardMaterial({
+            color: 0x0a0a0a,
+            roughness: 0.15, // 低いほどツルツル（濡れて反射する路面）
+            metalness: 0.5,
+        });
+
+        const wallMat = new THREE.MeshStandardMaterial({
+            color: 0x1c1c1e,
+            roughness: 0.8,  // ザラザラしたコンクリート
+            metalness: 0.1
+        });
+
+        // --- 5. ジオメトリ配置（仮のマップアセット） ---
+        // 地面
+        const floorGeo = new THREE.PlaneGeometry(30, 100);
+        const floor = new THREE.Mesh(floorGeo, groundMat);
         floor.rotation.x = -Math.PI / 2;
-        floor.receiveShadow = true; // 🌟 影を受ける
+        floor.receiveShadow = true;
         scene.add(floor);
 
-        // ビル・壁の自動生成関数
-        function createBuilding(x, z, width, height, depth) {
-            const geo = new THREE.BoxGeometry(width, height, depth);
-            const mesh = new THREE.Mesh(geo, wallMaterial);
-            mesh.position.set(x, height / 2, z);
-            mesh.castShadow = true; // 🌟 影を落とす
-            mesh.receiveShadow = true; // 🌟 影を受ける
+        // 裏路地の壁（アパート群のベース）
+        for(let i = -50; i < 50; i += 10) {
+            // 左側
+            createBox(wallMat, -3.5, 5, i, 2, 10, 10, true);
+            // 右側
+            createBox(wallMat, 3.5, 5, i, 2, 10, 10, true);
+            
+            // サイバーパンクなエミッシブ（自発光）ネオン
+            if(Math.random() > 0.4) {
+                const neonColor = Math.random() > 0.5 ? 0x00ffff : 0xff00ff;
+                const neonMat = new THREE.MeshStandardMaterial({
+                    color: neonColor,
+                    emissive: neonColor,
+                    emissiveIntensity: 4.0 // Bloomで光り輝く強度
+                });
+                // 左か右の壁に貼り付ける
+                const side = Math.random() > 0.5 ? -2.4 : 2.4;
+                createBox(neonMat, side, 4 + Math.random()*3, i + (Math.random()*4), 0.1, 2, 0.5, false);
+
+                // ネオンが周囲を照らすリアルなポイントライト
+                const pLight = new THREE.PointLight(neonColor, 3, 6);
+                pLight.position.set(side * 0.9, 4, i);
+                pLight.castShadow = true;
+                pLight.shadow.bias = -0.002;
+                scene.add(pLight);
+            }
+        }
+
+        function createBox(mat, x, y, z, w, h, d, shadow) {
+            const geo = new THREE.BoxGeometry(w, h, d);
+            const mesh = new THREE.Mesh(geo, mat);
+            mesh.position.set(x, y, z);
+            if(shadow) {
+                mesh.castShadow = true;
+                mesh.receiveShadow = true;
+            }
             scene.add(mesh);
-
-            // 室外機やダクトに見立てた突起をランダムに追加してディテールを上げる
-            const detailCount = Math.floor(Math.random() * 3);
-            for(let i=0; i<detailCount; i++) {
-                const boxGeo = new THREE.BoxGeometry(1, 1, 1);
-                const box = new THREE.Mesh(boxGeo, wallMaterial);
-                box.position.set(
-                    x + (Math.random() - 0.5) * width * 0.5,
-                    Math.random() * height,
-                    z + (Math.random() - 0.5) * depth * 0.5
-                );
-                box.castShadow = true;
-                scene.add(box);
-            }
+            return mesh;
         }
 
-        // 路地の左右にビルを配置（Z軸方向に並べる）
-        const streetWidth = 4; // 路地の幅
-        for (let z = -40; z <= 20; z += 8) {
-            // 左側のビル群（ランダムに高さと奥行きを変えて雑多感を出す）
-            let hLeft = 10 + Math.random() * 15;
-            let wLeft = 5 + Math.random() * 5;
-            createBuilding(-(streetWidth + wLeft/2), z, wLeft, hLeft, 7);
+        // --- 6. 本番運用：Blenderからのモデル読み込み機構 ---
+        // 本番はここを有効化し、上の仮ジオメトリ配置と差し替えます
+        /*
+        const loader = new THREE.GLTFLoader();
+        loader.load('assets/models/cyberpunk_alley.glb', (gltf) => {
+            const model = gltf.scene;
+            model.traverse((node) => {
+                if (node.isMesh) {
+                    node.castShadow = true;
+                    node.receiveShadow = true;
+                    // 必要に応じてマテリアルの調整
+                }
+            });
+            scene.add(model);
+        }, undefined, (error) => { console.error(error); });
+        */
 
-            // 右側のビル群
-            let hRight = 10 + Math.random() * 15;
-            let wRight = 5 + Math.random() * 5;
-            createBuilding((streetWidth + wRight/2), z, wRight, hRight, 7);
+        // --- 7. ループ処理 ---
+        const clock = new THREE.Clock();
 
-            // サイバーパンク風のネオン看板をランダムに配置
-            if (Math.random() > 0.3) {
-                const neonGeo = new THREE.BoxGeometry(0.1, 3, 1);
-                const isLeft = Math.random() > 0.5;
-                const neon = new THREE.Mesh(neonGeo, isLeft ? neonCyan : neonPink);
-                
-                // 看板の光が周囲を照らすようにポイントライトを追加
-                const pointLight = new THREE.PointLight(isLeft ? 0x00f3ff : 0xff0055, 1.5, 8);
-                pointLight.castShadow = true;
-
-                const neonX = isLeft ? -streetWidth : streetWidth;
-                const neonY = 4 + Math.random() * 6;
-                neon.position.set(neonX, neonY, z);
-                pointLight.position.set(neonX * 0.9, neonY, z);
-
-                scene.add(neon);
-                scene.add(pointLight);
-            }
-        }
-
-        // ロード画面を消す
-        document.getElementById('loading').style.display = 'none';
-
-        // --- アニメーションループ ---
         function animate() {
             requestAnimationFrame(animate);
-            controls.update(); // マウス操作の更新
+            
+            const elapsedTime = clock.getElapsedTime();
+            controls.update();
 
-            // ほんの少しカメラを前進させて路地を歩いているような臨場感を出す（ドラッグ中は停止）
-            if (!controls.state == -1) {
-                camera.position.z -= 0.01;
-            }
-
-            renderer.render(scene, camera);
+            // レンダラーの代わりに「composer」で描画（ポストプロセッシングの適用）
+            composer.render();
         }
 
-        // ウィンドウサイズが変更された時のレスポンシブ対応
-        window.addEventListener('resize', onWindowResize, false);
-        function onWindowResize() {
+        window.addEventListener('resize', () => {
             camera.aspect = window.innerWidth / window.innerHeight;
             camera.updateProjectionMatrix();
             renderer.setSize(window.innerWidth, window.innerHeight);
-        }
+            composer.setSize(window.innerWidth, window.innerHeight);
+        });
 
-        // 実行
         animate();
     </script>
 </body>
