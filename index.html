@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>3DペイントかくれんぼP2P</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: sans-serif; }
+        #ui { position: absolute; top: 10px; left: 10px; color: white; background: rgba(0,0,0,0.85); padding: 15px; border-radius: 8px; z-index: 10; max-width: 250px; }
+        input, button { margin-top: 5px; padding: 6px; font-size: 14px; width: 100%; box-sizing: border-radius; border: none; border-radius: 4px; }
+        button { background: #3498db; color: white; cursor: pointer; font-weight: bold; }
+        button:hover { background: #2980b9; }
+        #color-picker { height: 40px; padding: 0; cursor: pointer; }
+        hr { border: 0; border-top: 1px solid #444; margin: 10px 0; }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+</head>
+<body>
+
+    <div id="ui">
+        <h3>🎨 ペイントかくれんぼ</h3>
+        <p>あなたのID: <span id="my-id" style="color:#f1c40f;">接続中...</span></p>
+        <hr>
+        <p>🎨 <strong>カメレオン・ペイント</strong></p>
+        <input type="color" id="color-picker" value="#3498db">
+        <hr>
+        <p>🔗 <strong>マルチプレイ (最大5人)</strong></p>
+        <input type="text" id="peer-id-input" placeholder="友達のIDを入力">
+        <button id="connect-btn">部屋に入る</button>
+        <hr>
+        <p style="font-size: 12px; color: #ccc;">操作: 矢印キー / WASD（移動）<br>背景の標識や壁と同じ色に体をペイントして隠れろ！</p>
+    </div>
+
+    <script>
+        // --- 1. 3D空間とレンダラーの初期化 ---
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x1a1a1a); // 暗めのスタイリッシュな空間
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        // ライト配置
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+        scene.add(ambientLight);
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.5);
+        dirLight.position.set(20, 40, 20);
+        scene.add(dirLight);
+
+        // --- 2. 3Dステージ・マップの構築（1マップ） ---
+        // 地面
+        const gridGeo = new THREE.PlaneGeometry(60, 60);
+        const gridMat = new THREE.MeshLambertMaterial({ color: 0x333333 });
+        const ground = new THREE.Mesh(gridGeo, gridMat);
+        ground.rotation.x = -Math.PI / 2;
+        scene.add(ground);
+
+        // 隠れ場所オブジェクトを生成する関数
+        function createMapObject(geometry, color, x, z, ry = 0) {
+            const mat = new THREE.MeshLambertMaterial({ color: color });
+            const mesh = new THREE.Mesh(geometry, mat);
+            mesh.position.set(x, geometry.parameters.height ? geometry.parameters.height / 2 : 0, z);
+            mesh.rotation.y = ry;
+            scene.add(mesh);
+            return mesh;
+        }
+
+        // マップ内の「擬態用オブジェクト」たち
+        // 1. 巨大な赤い壁
+        const wallGeo = new THREE.BoxGeometry(15, 8, 2);
+        createMapObject(wallGeo, 0xe74c3c, -10, -10);
+
+        // 2. 黄色いコンテナ
+        const boxGeo = new THREE.BoxGeometry(6, 6, 6);
+        createMapObject(boxGeo, 0xf1c40f, 12, 8);
+
+        // 3. 青いタワー
+        const cylinderGeo = new THREE.CylinderGeometry(3, 3, 12, 16);
+        createMapObject(cylinderGeo, 0x2980b9, -12, 12);
+
+        // 4. 道路標識（擬態ポイント）をいくつか作成
+        function createSign(x, z, color, type="stop") {
+            const group = new THREE.Group();
+            // 支柱（灰色）
+            const poleGeo = new THREE.CylinderGeometry(0.15, 0.15, 5, 8);
+            const poleMat = new THREE.MeshLambertMaterial({ color: 0x888888 });
+            const pole = new THREE.Mesh(poleGeo, poleMat);
+            pole.position.y = 2.5;
+            group.add(pole);
+
+            // 標識の板
+            let board;
+            if(type === "stop") {
+                // 八角形っぽい立方体
+                const boardGeo = new THREE.BoxGeometry(1.5, 1.5, 0.1);
+                const boardMat = new THREE.MeshLambertMaterial({ color: color });
+                board = new THREE.Mesh(boardGeo, boardMat);
+                board.rotation.y = Math.PI / 4;
+            } else {
+                // 丸型
+                const boardGeo = new THREE.CylinderGeometry(0.8, 0.8, 0.1, 16);
+                const boardMat = new THREE.MeshLambertMaterial({ color: color });
+                board = new THREE.Mesh(boardGeo, boardMat);
+                board.rotation.x = Math.PI / 2;
+            }
+            board.position.y = 5;
+            group.add(board);
+
+            group.position.set(x, 0, z);
+            scene.add(group);
+        }
+
+        // マップに標識を配置（赤、青、黄色、緑など）
+        createSign(-5, 5, 0xe74c3c, "stop");   // 赤の止まれ標識風
+        createSign(5, -8, 0x27ae60, "circle"); // 緑の標識風
+        createSign(8, -5, 0xf1c40f, "stop");   // 黄色の標識風
+
+        // --- 3. 3D棒人間（プレイヤー）の作成システム ---
+        function createStickman(colorHex) {
+            const group = new THREE.Group();
+            const mat = new THREE.MeshLambertMaterial({ color: colorHex });
+
+            // 頭 (球体)
+            const headGeo = new THREE.SphereGeometry(0.4, 16, 16);
+            const head = new THREE.Mesh(headGeo, mat);
+            head.position.y = 2.2;
+            group.add(head);
+
+            // 胴体 (細長いカプセル/円柱)
+            const bodyGeo = new THREE.CylinderGeometry(0.2, 0.2, 1.0, 8);
+            const body = new THREE.Mesh(bodyGeo, mat);
+            body.position.y = 1.4;
+            group.add(body);
+
+            // 足（左・右）
+            const legGeo = new THREE.CylinderGeometry(0.08, 0.08, 0.9, 8);
+            const leftLeg = new THREE.Mesh(legGeo, mat);
+            leftLeg.position.set(-0.2, 0.45, 0);
+            const rightLeg = new THREE.Mesh(legGeo, mat);
+            rightLeg.position.set(0.2, 0.45, 0);
+            group.add(leftLeg, rightLeg);
+
+            // 腕（左・右）
+            const armGeo = new THREE.CylinderGeometry(0.07, 0.07, 0.8, 8);
+            const leftArm = new THREE.Mesh(armGeo, mat);
+            leftArm.position.set(-0.35, 1.4, 0);
+            leftArm.rotation.z = Math.PI / 12;
+            const rightArm = new THREE.Mesh(armGeo, mat);
+            rightArm.position.set(0.35, 1.4, 0);
+            rightArm.rotation.z = -Math.PI / 12;
+            group.add(leftArm, rightArm);
+
+            return { mesh: group, materials: [mat] }; // 色を一括変更できるようにマテリアルを保持
+        }
+
+        // 自分の棒人間を生成
+        let myColor = 0x3498db;
+        const myCharacter = createStickman(myColor);
+        scene.add(myCharacter.mesh);
+
+        // カメラ初期位置
+        camera.position.set(0, 15, 20);
+        camera.lookAt(myCharacter.mesh.position);
+
+        // 他プレイヤーの格納庫
+        const otherPlayers = {};
+
+        // --- 4. P2P通信（PeerJS）とペイント機能 ---
+        const peer = new Peer();
+        let connections = [];
+
+        peer.on('open', (id) => {
+            document.getElementById('my-id').innerText = id;
+        });
+
+        // 部屋を建てた側：接続を受け付ける
+        peer.on('connection', (conn) => {
+            setupConnection(conn);
+        });
+
+        // 部屋に入る側：ボタンを押してホストに繋ぐ
+        document.getElementById('connect-btn').addEventListener('click', () => {
+            const targetId = document.getElementById('peer-id-input').value.trim();
+            if (targetId) {
+                const conn = peer.connect(targetId);
+                setupConnection(conn);
+            }
+        });
+
+        function setupConnection(conn) {
+            connections.push(conn);
+            conn.on('open', () => {
+                console.log("接続完了: " + conn.peer);
+                // 相手用の棒人間を生成（最初は白）
+                const p = createStickman(0xffffff);
+                scene.add(p.mesh);
+                otherPlayers[conn.peer] = p;
+            });
+
+            conn.on('data', (data) => {
+                if (otherPlayers[data.id]) {
+                    // 位置と色の同期
+                    otherPlayers[data.id].mesh.position.set(data.x, data.y, data.z);
+                    otherPlayers[data.id].materials[0].color.setHex(data.color);
+                }
+            });
+        }
+
+        // カラーピッカーで自分の棒人間の色をリアルタイム変更！
+        document.getElementById('color-picker').addEventListener('input', (e) => {
+            const hexStr = e.target.value.replace('#', '0x');
+            myColor = parseInt(hexStr, 16);
+            myCharacter.materials[0].color.setHex(myColor);
+        });
+
+        // --- 5. 移動操作とメインループ ---
+        const keys = {};
+        window.addEventListener('keydown', (e) => keys[e.code] = true);
+        window.addEventListener('keyup', (e) => keys[e.code] = false);
+
+        function update() {
+            const speed = 0.15;
+            let moved = false;
+
+            if (keys['ArrowUp'] || keys['KeyW']) { myCharacter.mesh.position.z -= speed; moved = true; }
+            if (keys['ArrowDown'] || keys['KeyS']) { myCharacter.mesh.position.z += speed; moved = true; }
+            if (keys['ArrowLeft'] || keys['KeyA']) { myCharacter.mesh.position.x -= speed; moved = true; }
+            if (keys['ArrowRight'] || keys['KeyD']) { myCharacter.mesh.position.x += speed; moved = true; }
+
+            // カメラがプレイヤーの後ろを追従
+            camera.position.x = myCharacter.mesh.position.x;
+            camera.position.z = myCharacter.mesh.position.z + 18;
+            camera.position.y = myCharacter.mesh.position.y + 12;
+            camera.lookAt(myCharacter.mesh.position);
+
+            // 自分の最新状態（座標・ペイント色）を全員に送りつける
+            const myState = {
+                id: peer.id,
+                x: myCharacter.mesh.position.x,
+                y: myCharacter.mesh.position.y,
+                z: myCharacter.mesh.position.z,
+                color: myColor
+            };
+
+            connections.forEach(conn => {
+                if (conn.open) conn.send(myState);
+            });
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            update();
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        // リサイズ対応
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>
